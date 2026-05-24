@@ -1,0 +1,29 @@
+{
+  "expo": {
+    "name": "Random Quote App",
+    "slug": "random-quote-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "icon": "./assets/logo.png",
+    "splash": {
+      "image": "./assets/logo.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0F172A"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.example.randomquoteapp"
+    },
+    "android": {
+      "package": "com.example.randomquoteapp",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/logo.png",
+        "backgroundColor": "#0F172A"
+      }
+    }
+  }
+}
