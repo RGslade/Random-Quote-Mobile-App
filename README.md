@@ -33,10 +33,6 @@ A mobile quote-of-the-day demo built with Expo and React Native. The app present
 
 - **RevenueCat** via `react-native-purchases` and `react-native-purchases-ui`
   - Used for customer entitlement checks, the remove-ads paywall, purchase restore, and customer center.
-  - API keys are read from environment variables:
-    - `EXPO_PUBLIC_REVENUECAT_IOS_API_KEY`
-    - `EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY`
-    - `EXPO_PUBLIC_REVENUECAT_API_KEY`
 
 - **Expo / EAS**
   - Used for local development, native builds, and app configuration.
@@ -60,44 +56,10 @@ The quote content itself is stored in this repository under `src/constants/quote
         `-- quotePicker.js         # Random quote helper
 ```
 
-## Getting started
-
-Install dependencies:
-
-```bash
-npm install
-```
-
-Start the Expo development server:
-
-```bash
-npm start
-```
-
-Run on Android or iOS with a development build:
-
-```bash
-npm run android
-npm run ios
-```
-
-Run linting:
-
-```bash
-npm run lint
-```
-
 ## Environment variables
 
 RevenueCat integration is optional for reading and exploring the app, but purchase and restore flows require RevenueCat API keys. Create an `.env` file for local development if needed:
 
-```bash
-EXPO_PUBLIC_REVENUECAT_IOS_API_KEY=your_ios_key
-EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY=your_android_key
-EXPO_PUBLIC_REVENUECAT_API_KEY=your_fallback_key
-```
-
-`.env.*` files are ignored by Git.
 
 ## Notes
 
