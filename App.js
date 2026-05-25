@@ -3,9 +3,11 @@ import {
   Animated,
   AppState,
   Appearance,
+  AccessibilityInfo,
   ActivityIndicator,
   Easing,
   Modal,
+  PanResponder,
   Platform,
   Pressable,
   StyleSheet,
@@ -13,6 +15,7 @@ import {
   View,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Haptics from 'expo-haptics';
 import { Accelerometer } from 'expo-sensors';
 import { BannerAd, BannerAdSize, TestIds } from 'react-native-google-mobile-ads';
 import { Canvas, Fill, Group, Shader, Skia } from '@shopify/react-native-skia';
@@ -21,13 +24,12 @@ import RevenueCatUI, { PAYWALL_RESULT } from 'react-native-purchases-ui';
 
 import { QUOTE_CATEGORIES } from './src/constants/quotes';
 import { pickDifferentQuote } from './src/utils/quotePicker';
+import { THEME_OPTIONS, getValidBooleanPreference, getValidQuoteMode, getValidThemePreference } from './src/utils/preferences';
 
 // Persist user preferences locally without storing personal data.
 const STORAGE_KEY = 'quote-theme-preference';
 const QUOTE_MODE_STORAGE_KEY = 'quote-mode-preference';
-
-// Keep selectable options explicit before reading or saving preferences.
-const THEME_OPTIONS = ['system', 'light', 'dark'];
+const REDUCE_MOTION_STORAGE_KEY = 'quote-reduced-motion-preference';
 const QUOTE_MODES = Object.keys(QUOTE_CATEGORIES).sort((firstMode, secondMode) => {
   return firstMode.localeCompare(secondMode);
 });
@@ -140,6 +142,8 @@ export default function App() {
   const [quoteMenuOpen, setQuoteMenuOpen] = useState(false);
   const [themePreference, setThemePreference] = useState('system');
   const [systemScheme, setSystemScheme] = useState(Appearance.getColorScheme() ?? 'light');
+  const [systemReduceMotion, setSystemReduceMotion] = useState(false);
+  const [reduceMotionPreference, setReduceMotionPreference] = useState(false);
   const [hasPro, setHasPro] = useState(false);
   const [removeAdsModalOpen, setRemoveAdsModalOpen] = useState(false);
   const [revenueCatReady, setRevenueCatReady] = useState(false);
@@ -173,6 +177,7 @@ export default function App() {
 
   const resolvedTheme = themePreference === 'system' ? systemScheme : themePreference;
   const isDark = resolvedTheme === 'dark';
+  const reduceMotion = systemReduceMotion || reduceMotionPreference;
 
   // Rebuild styles only when the resolved theme changes.
   const styles = useMemo(() => createStyles(isDark), [isDark]);
@@ -186,6 +191,19 @@ export default function App() {
   // Convert RevenueCat customer info into a simple ad-removal entitlement flag.
   const updateProFromCustomerInfo = useCallback((customerInfo) => {
     setHasPro(typeof customerInfo?.entitlements?.active?.[PRO_ENTITLEMENT_ID] !== 'undefined');
+  }, []);
+
+  const triggerHaptic = useCallback(async (type = 'selection') => {
+    try {
+      if (type === 'impact') {
+        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        return;
+      }
+
+      await Haptics.selectionAsync();
+    } catch {
+      // Haptics are best-effort and intentionally optional across platforms.
+    }
   }, []);
 
   // Load the current RevenueCat offering and choose the remove-ads package.
@@ -213,6 +231,12 @@ export default function App() {
 
   // Fade the quote in whenever a fresh quote is selected.
   const animateQuoteIn = useCallback(() => {
+    if (reduceMotion) {
+      fadeAnim.setValue(1);
+      revealAnim.setValue(1);
+      return;
+    }
+
     fadeAnim.setValue(0);
     Animated.timing(fadeAnim, {
       toValue: 1,
@@ -220,36 +244,61 @@ export default function App() {
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
     }).start();
-  }, [fadeAnim]);
+  }, [fadeAnim, reduceMotion, revealAnim]);
 
   // Give the quote orb a short wobble after a physical device shake.
   const triggerShakeAnimation = useCallback(() => {
+    if (reduceMotion) return;
+
     shakeAnim.setValue(0);
     Animated.sequence([
       Animated.timing(shakeAnim, { toValue: 1, duration: 450, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
       Animated.timing(shakeAnim, { toValue: 0, duration: 450, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
     ]).start();
-  }, [shakeAnim]);
+  }, [reduceMotion, shakeAnim]);
 
   // Load a saved theme only when it matches one of the supported options.
   const loadThemePreference = useCallback(async () => {
     const stored = await AsyncStorage.getItem(STORAGE_KEY);
-    if (stored && THEME_OPTIONS.includes(stored)) setThemePreference(stored);
+    setThemePreference(getValidThemePreference(stored));
   }, []);
 
   // Save theme changes locally and close the picker once a choice is made.
   const saveThemePreference = useCallback(async (nextPreference) => {
     setThemePreference(nextPreference);
     setThemeMenuOpen(false);
+    triggerHaptic();
     await AsyncStorage.setItem(STORAGE_KEY, nextPreference);
+  }, [triggerHaptic]);
+
+  const loadReduceMotionPreference = useCallback(async () => {
+    const stored = await AsyncStorage.getItem(REDUCE_MOTION_STORAGE_KEY);
+    setReduceMotionPreference(getValidBooleanPreference(stored));
   }, []);
+
+  const toggleReduceMotionPreference = useCallback(async () => {
+    const nextPreference = !reduceMotionPreference;
+    setReduceMotionPreference(nextPreference);
+    triggerHaptic();
+    await AsyncStorage.setItem(REDUCE_MOTION_STORAGE_KEY, String(nextPreference));
+  }, [reduceMotionPreference, triggerHaptic]);
+
+  const toggleQuoteMenu = useCallback(() => {
+    setQuoteMenuOpen((prev) => !prev);
+    setThemeMenuOpen(false);
+    triggerHaptic();
+  }, [triggerHaptic]);
+
+  const toggleThemeMenu = useCallback(() => {
+    setThemeMenuOpen((prev) => !prev);
+    setQuoteMenuOpen(false);
+    triggerHaptic();
+  }, [triggerHaptic]);
 
   // Load the saved quote category only when it still exists in the app.
   const loadQuoteModePreference = useCallback(async () => {
     const stored = await AsyncStorage.getItem(QUOTE_MODE_STORAGE_KEY);
-    if (stored && QUOTE_MODES.includes(stored)) {
-      setQuoteMode(stored);
-    }
+    setQuoteMode(getValidQuoteMode(stored, QUOTE_MODES, DEFAULT_QUOTE_MODE));
   }, []);
 
   // Change quote category, refresh the displayed quote, and persist the choice.
@@ -259,16 +308,18 @@ export default function App() {
     revealDurationRef.current = 700;
     revealAnim.setValue(0);
     setQuote((currentQuote) => pickDifferentQuote(QUOTE_CATEGORIES[nextMode], currentQuote));
+    triggerHaptic();
     await AsyncStorage.setItem(QUOTE_MODE_STORAGE_KEY, nextMode);
-  }, [revealAnim]);
+  }, [revealAnim, triggerHaptic]);
 
   // Pick a different quote and adjust the reveal duration for shake-triggered changes.
   const setNextQuote = useCallback((withShake = false) => {
-    revealDurationRef.current = withShake ? 1600 : 700;
+    revealDurationRef.current = withShake ? 1200 : 620;
     revealAnim.setValue(0);
     setQuote((currentQuote) => pickDifferentQuote(quotesForMode, currentQuote));
+    triggerHaptic(withShake ? 'impact' : 'selection');
     if (withShake) triggerShakeAnimation();
-  }, [quotesForMode, revealAnim, triggerShakeAnimation]);
+  }, [quotesForMode, revealAnim, triggerHaptic, triggerShakeAnimation]);
 
   // Open the remove-ads flow and lazy-load product details when possible.
   const openRemoveAdsModal = useCallback(async () => {
@@ -373,11 +424,19 @@ export default function App() {
   useEffect(() => {
     loadThemePreference();
     loadQuoteModePreference();
+    loadReduceMotionPreference();
     const appearanceSubscription = Appearance.addChangeListener(({ colorScheme }) => {
       setSystemScheme(colorScheme ?? 'light');
     });
-    return () => appearanceSubscription.remove();
-  }, [loadQuoteModePreference, loadThemePreference]);
+    const reduceMotionSubscription = AccessibilityInfo.addEventListener('reduceMotionChanged', setSystemReduceMotion);
+
+    AccessibilityInfo.isReduceMotionEnabled().then(setSystemReduceMotion);
+
+    return () => {
+      appearanceSubscription.remove();
+      reduceMotionSubscription.remove();
+    };
+  }, [loadQuoteModePreference, loadReduceMotionPreference, loadThemePreference]);
 
   // Configure RevenueCat only when a public env-provided API key is available.
   useEffect(() => {
@@ -428,36 +487,56 @@ export default function App() {
     }
 
     animateQuoteIn();
+    if (reduceMotion) {
+      revealAnim.setValue(1);
+      return;
+    }
+
     Animated.timing(revealAnim, {
       toValue: 1,
       duration: revealDurationRef.current,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
     }).start();
-  }, [quote, animateQuoteIn, fadeAnim, revealAnim]);
+  }, [quote, animateQuoteIn, fadeAnim, reduceMotion, revealAnim]);
 
   // Open and close the theme menu with a subtle movement animation.
   useEffect(() => {
+    if (reduceMotion) {
+      themeMenuAnim.setValue(themeMenuOpen ? 1 : 0);
+      return;
+    }
+
     Animated.timing(themeMenuAnim, {
       toValue: themeMenuOpen ? 1 : 0,
       duration: 180,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
     }).start();
-  }, [themeMenuAnim, themeMenuOpen]);
+  }, [reduceMotion, themeMenuAnim, themeMenuOpen]);
 
   // Open and close the quote category menu with matching motion.
   useEffect(() => {
+    if (reduceMotion) {
+      quoteMenuAnim.setValue(quoteMenuOpen ? 1 : 0);
+      return;
+    }
+
     Animated.timing(quoteMenuAnim, {
       toValue: quoteMenuOpen ? 1 : 0,
       duration: 180,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
     }).start();
-  }, [quoteMenuAnim, quoteMenuOpen]);
+  }, [quoteMenuAnim, quoteMenuOpen, reduceMotion]);
 
   // Keep the quote orb gently moving so the screen does not feel static.
   useEffect(() => {
+    if (reduceMotion) {
+      floatAnim.setValue(0);
+      return undefined;
+    }
+
     const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(floatAnim, {
@@ -476,10 +555,12 @@ export default function App() {
     );
     loop.start();
     return () => loop.stop();
-  }, [floatAnim]);
+  }, [floatAnim, reduceMotion]);
 
   // Update shader uniforms on an animation frame for the orb swirl effect.
   useEffect(() => {
+    if (reduceMotion) return undefined;
+
     let frameId;
     let lastFrameAt = 0;
     const startedAt = Date.now();
@@ -511,7 +592,7 @@ export default function App() {
 
     frameId = requestAnimationFrame(animateOrb);
     return () => cancelAnimationFrame(frameId);
-  }, []);
+  }, [reduceMotion]);
 
   // Listen for device shakes and throttle them to prevent rapid quote changes.
   useEffect(() => {
@@ -544,6 +625,23 @@ export default function App() {
     return () => subscription.remove();
   }, [setNextQuote]);
 
+  useEffect(() => {
+    if (!quote) {
+      setNextQuote(false);
+    }
+  }, [quote, setNextQuote]);
+
+  const quotePanResponder = useMemo(() => PanResponder.create({
+    onMoveShouldSetPanResponder: (_, gestureState) => {
+      return Math.abs(gestureState.dx) > 28 && Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.6;
+    },
+    onPanResponderRelease: (_, gestureState) => {
+      if (Math.abs(gestureState.dx) > 46) {
+        setNextQuote(false);
+      }
+    },
+  }), [setNextQuote]);
+
   // Combine the idle float and shake wobble into one transform for the quote orb.
   const quoteTransform = [
     {
@@ -572,19 +670,19 @@ export default function App() {
         <View style={styles.topActions}>
           <Pressable
             style={styles.modeButton}
-            onPress={() => {
-              setQuoteMenuOpen((prev) => !prev);
-              setThemeMenuOpen(false);
-            }}
+            accessibilityRole="button"
+            accessibilityLabel="Choose quote category"
+            accessibilityHint="Opens the quote category menu"
+            onPress={toggleQuoteMenu}
           >
             <Text style={styles.modeButtonText}>{QUOTE_MODE_LABELS[quoteMode] ?? quoteMode}</Text>
           </Pressable>
           <Pressable
             style={styles.themeButton}
-            onPress={() => {
-              setThemeMenuOpen((prev) => !prev);
-              setQuoteMenuOpen(false);
-            }}
+            accessibilityRole="button"
+            accessibilityLabel="Choose theme and motion settings"
+            accessibilityHint="Opens the theme and reduced motion menu"
+            onPress={toggleThemeMenu}
           >
             <Text style={styles.themeButtonText}>{resolvedTheme === 'dark' ? 'Dark' : 'Light'}</Text>
           </Pressable>
@@ -607,7 +705,14 @@ export default function App() {
           ]}
         >
           {QUOTE_MODES.map((mode) => (
-            <Pressable key={mode} style={styles.menuItem} onPress={() => selectQuoteMode(mode)}>
+            <Pressable
+              key={mode}
+              style={[styles.menuItem, quoteMode === mode && styles.activeMenuItem]}
+              accessibilityRole="button"
+              accessibilityLabel={`Use ${QUOTE_MODE_LABELS[mode] ?? mode} quotes`}
+              accessibilityState={{ selected: quoteMode === mode }}
+              onPress={() => selectQuoteMode(mode)}
+            >
               <Text style={[styles.menuItemText, quoteMode === mode && styles.activeMenuItemText]}>
                 {QUOTE_MODE_LABELS[mode] ?? mode}
               </Text>
@@ -632,62 +737,107 @@ export default function App() {
           ]}
         >
           {THEME_OPTIONS.map((option) => (
-            <Pressable key={option} style={styles.menuItem} onPress={() => saveThemePreference(option)}>
-              <Text style={styles.menuItemText}>{option}</Text>
+            <Pressable
+              key={option}
+              style={[styles.menuItem, themePreference === option && styles.activeMenuItem]}
+              accessibilityRole="button"
+              accessibilityLabel={`Use ${option} theme`}
+              accessibilityState={{ selected: themePreference === option }}
+              onPress={() => saveThemePreference(option)}
+            >
+              <Text style={[styles.menuItemText, themePreference === option && styles.activeMenuItemText]}>{option}</Text>
             </Pressable>
           ))}
+          <Pressable
+            style={[styles.menuItem, styles.lastMenuItem]}
+            accessibilityRole="switch"
+            accessibilityLabel="Reduce motion"
+            accessibilityState={{ checked: reduceMotionPreference }}
+            onPress={toggleReduceMotionPreference}
+          >
+            <Text style={styles.menuItemText}>{reduceMotionPreference ? 'motion reduced' : 'full motion'}</Text>
+          </Pressable>
         </Animated.View>
       </View>
 
       <View style={styles.content}>
-        <Animated.View style={[styles.oracleWrap, { transform: quoteTransform }]}>
-          <View style={styles.orb}>
-            <Canvas pointerEvents="none" style={styles.orbCanvas}>
-              <Group>
-                {ORB_SWIRL_SHADER ? (
-                  <>
-                    <Shader
-                      source={ORB_SWIRL_SHADER}
-                      uniforms={{
-                        resolution: [ORB_SIZE, ORB_SIZE],
-                        time: orbUniforms.time,
-                        drift: orbUniforms.drift,
-                        seed: orbUniforms.seed,
-                      }}
-                    />
-                    <Fill />
-                  </>
-                ) : (
-                  <Fill color="#E6FAFF" />
-                )}
-              </Group>
-            </Canvas>
-            <View pointerEvents="none" style={styles.orbGlow} />
-            {quote ? (
-              <View style={styles.quoteWindow}>
-                <Animated.Text style={[styles.quoteText, { opacity: Animated.multiply(fadeAnim, revealAnim) }]}>
-                  {quote}
-                </Animated.Text>
-              </View>
-            ) : null}
-            <View pointerEvents="none" style={styles.orbShine} />
-            <Animated.View
-              pointerEvents="none"
-              style={[
-                styles.blurOverlay,
-                {
-                  opacity: revealAnim.interpolate({ inputRange: [0, 1], outputRange: [0.76, 0] }),
-                },
-              ]}
-            />
-          </View>
+        <Animated.View {...quotePanResponder.panHandlers} style={[styles.oracleWrap, { transform: quoteTransform }]}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={quote ? `Current quote. ${quote}` : 'Show a random quote'}
+            accessibilityHint="Tap or swipe to reveal another quote. You can also shake the device."
+            onPress={() => setNextQuote(false)}
+          >
+            <View style={styles.orb}>
+              <Canvas pointerEvents="none" style={styles.orbCanvas}>
+                <Group>
+                  {ORB_SWIRL_SHADER ? (
+                    <>
+                      <Shader
+                        source={ORB_SWIRL_SHADER}
+                        uniforms={{
+                          resolution: [ORB_SIZE, ORB_SIZE],
+                          time: orbUniforms.time,
+                          drift: orbUniforms.drift,
+                          seed: orbUniforms.seed,
+                        }}
+                      />
+                      <Fill />
+                    </>
+                  ) : (
+                    <Fill color="#E6FAFF" />
+                  )}
+                </Group>
+              </Canvas>
+              <View pointerEvents="none" style={styles.orbGlow} />
+              {quote ? (
+                <View style={styles.quoteWindow}>
+                  <Animated.Text
+                    maxFontSizeMultiplier={1.35}
+                    style={[
+                      styles.quoteText,
+                      {
+                        opacity: Animated.multiply(fadeAnim, revealAnim),
+                        transform: [
+                          {
+                            translateY: revealAnim.interpolate({ inputRange: [0, 1], outputRange: [reduceMotion ? 0 : 10, 0] }),
+                          },
+                          {
+                            scale: revealAnim.interpolate({ inputRange: [0, 1], outputRange: [reduceMotion ? 1 : 0.98, 1] }),
+                          },
+                        ],
+                      },
+                    ]}
+                  >
+                    {quote}
+                  </Animated.Text>
+                </View>
+              ) : null}
+              <View pointerEvents="none" style={styles.orbShine} />
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.blurOverlay,
+                  {
+                    opacity: revealAnim.interpolate({ inputRange: [0, 1], outputRange: [reduceMotion ? 0 : 0.7, 0] }),
+                  },
+                ]}
+              />
+            </View>
+          </Pressable>
           <View pointerEvents="none" style={styles.holder} />
         </Animated.View>
       </View>
 
       {!hasPro ? (
         <View style={styles.adContainer}>
-          <Pressable style={styles.removeAdsButton} onPress={openRemoveAdsModal}>
+          <Pressable
+            style={styles.removeAdsButton}
+            accessibilityRole="button"
+            accessibilityLabel="Remove ads"
+            accessibilityHint="Opens the optional RevenueCat remove ads flow"
+            onPress={openRemoveAdsModal}
+          >
             <Text style={styles.removeAdsButtonText}>X</Text>
           </Pressable>
           <BannerAd unitId={TestIds.BANNER} size={BannerAdSize.ANCHORED_ADAPTIVE_BANNER} />
@@ -713,6 +863,8 @@ export default function App() {
               <Pressable
                 style={[styles.modalButton, styles.closeModalButton]}
                 disabled={purchaseLoading}
+                accessibilityRole="button"
+                accessibilityLabel="Close remove ads dialog"
                 onPress={() => setRemoveAdsModalOpen(false)}
               >
                 <Text style={styles.closeModalButtonText}>Close</Text>
@@ -720,6 +872,8 @@ export default function App() {
               <Pressable
                 style={[styles.modalButton, styles.purchaseModalButton, purchaseLoading && styles.disabledButton]}
                 disabled={purchaseLoading}
+                accessibilityRole="button"
+                accessibilityLabel="Open remove ads paywall"
                 onPress={presentRemoveAdsPaywall}
               >
                 {purchaseLoading ? (
@@ -731,7 +885,12 @@ export default function App() {
                 )}
               </Pressable>
             </View>
-            <Pressable style={styles.customerCenterButton} onPress={openCustomerCenter}>
+            <Pressable
+              style={styles.customerCenterButton}
+              accessibilityRole="button"
+              accessibilityLabel="Manage purchases"
+              onPress={openCustomerCenter}
+            >
               <Text style={styles.customerCenterButtonText}>Manage purchases</Text>
             </Pressable>
           </View>
@@ -746,7 +905,7 @@ function createStyles(isDark) {
   return StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: isDark ? '#0F172A' : '#F8FAFC',
+      backgroundColor: isDark ? '#101820' : '#F7FAF8',
       paddingTop: 70,
       paddingHorizontal: 20,
       paddingBottom: 12,
@@ -802,7 +961,8 @@ function createStyles(isDark) {
     brandText: {
       fontSize: 18,
       fontWeight: '700',
-      color: isDark ? '#F8FAFC' : '#0F172A',
+      color: isDark ? '#F8FAFC' : '#102027',
+      letterSpacing: 0,
     },
     topActions: {
       flexDirection: 'row',
@@ -816,32 +976,39 @@ function createStyles(isDark) {
       justifyContent: 'center',
       alignItems: 'center',
       paddingHorizontal: 12,
-      backgroundColor: isDark ? '#1E293B' : '#E2E8F0',
+      backgroundColor: isDark ? '#1F2A2E' : '#E7EFEA',
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: isDark ? '#405059' : '#CAD8D0',
     },
     modeButtonText: {
       color: isDark ? '#F8FAFC' : '#0F172A',
       fontSize: 14,
       fontWeight: '700',
+      letterSpacing: 0,
     },
     themeButton: {
-      width: 42,
+      minWidth: 58,
       height: 42,
       borderRadius: 12,
       justifyContent: 'center',
       alignItems: 'center',
-      backgroundColor: isDark ? '#1E293B' : '#E2E8F0',
+      paddingHorizontal: 10,
+      backgroundColor: isDark ? '#1F2A2E' : '#E7EFEA',
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: isDark ? '#405059' : '#CAD8D0',
     },
     themeButtonText: {
       color: isDark ? '#F8FAFC' : '#0F172A',
-      fontSize: 18,
-      fontWeight: '600',
+      fontSize: 14,
+      fontWeight: '700',
+      letterSpacing: 0,
     },
     quoteMenu: {
       position: 'absolute',
       top: 48,
-      right: 50,
+      right: 68,
       minWidth: 132,
-      backgroundColor: isDark ? '#1E293B' : '#FFFFFF',
+      backgroundColor: isDark ? '#1A2429' : '#FFFFFF',
       borderRadius: 12,
       overflow: 'hidden',
       shadowColor: '#000000',
@@ -855,7 +1022,7 @@ function createStyles(isDark) {
       top: 48,
       right: 0,
       minWidth: 112,
-      backgroundColor: isDark ? '#1E293B' : '#FFFFFF',
+      backgroundColor: isDark ? '#1A2429' : '#FFFFFF',
       borderRadius: 12,
       overflow: 'hidden',
       shadowColor: '#000000',
@@ -870,10 +1037,17 @@ function createStyles(isDark) {
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: isDark ? '#334155' : '#CBD5E1',
     },
+    activeMenuItem: {
+      backgroundColor: isDark ? 'rgba(94, 234, 212, 0.12)' : 'rgba(20, 184, 166, 0.1)',
+    },
+    lastMenuItem: {
+      borderBottomWidth: 0,
+    },
     menuItemText: {
       color: isDark ? '#F1F5F9' : '#0F172A',
       textTransform: 'capitalize',
       fontSize: 15,
+      letterSpacing: 0,
     },
     activeMenuItemText: {
       fontWeight: '800',
@@ -883,7 +1057,7 @@ function createStyles(isDark) {
       flex: 1,
       alignItems: 'center',
       justifyContent: 'center',
-      paddingTop: 72,
+      paddingTop: 56,
     },
     oracleWrap: {
       width: 320,
@@ -962,6 +1136,7 @@ function createStyles(isDark) {
       fontWeight: '700',
       lineHeight: 30,
       color: isDark ? '#0F172A' : '#12313A',
+      letterSpacing: 0,
     },
     adContainer: {
       alignItems: 'center',
